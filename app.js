@@ -28,13 +28,14 @@ var express  = require('express'),
 require('./config/express')(app);
 
 // if bluemix credentials exists, then override local
-var credentials =  extend({
-  url: '<url>',
-  username: '<username>',
-  password: '<password>',
+var dialog_credentials = extend({
   version: 'v1'
 }, bluemix.getServiceCreds('dialog')); // VCAP_SERVICES
 
+var tone_credentials = extend({
+  version: 'v3-beta',
+  version_date: '2016-02-11'
+}, bluemix.getServiceCreds('tone_analyzer'));
 
 var dialog_id_in_json = (function() {
   try {
@@ -49,15 +50,37 @@ var dialog_id_in_json = (function() {
 var dialog_id = process.env.DIALOG_ID || dialog_id_in_json || '<missing-dialog-id>';
 
 // Create the service wrapper
-var dialog = watson.dialog(credentials);
+var dialog = watson.dialog(dialog_credentials);
+var tone_analyzer = watson.tone_analyzer(tone_credentials);
 
 app.post('/conversation', function(req, res, next) {
-  var params = extend({ dialog_id: dialog_id }, req.body);
-  dialog.conversation(params, function(err, results) {
+
+  req.body.input = req.body.input || "Hello"
+  tone_analyzer.tone({ text: req.body.input }, function(err, tone) {
     if (err)
       return next(err);
-    else
-      res.json({ dialog_id: dialog_id, conversation: results});
+
+    var categories = tone.document_tone.tone_categories
+    var emotion_tones = categories.find(function (tone) {
+      return tone.category_id === 'emotion_tone'
+    })
+
+    var anger_tone = emotion_tones.tones.find(function (tone) {
+      return tone.tone_id === 'anger'
+    })
+
+    var params = {client_id: req.body.client_id, dialog_id: dialog_id, name_values: [{name: 'anger', value: anger_tone.score}]}
+    dialog.updateProfile(params, function (err, results) {
+      if (err) return console.error(err)
+
+      var params = extend({ dialog_id: dialog_id }, req.body);
+      dialog.conversation(params, function(err, results) {
+        if (err)
+          return next(err);
+        else
+          res.json({ dialog_id: dialog_id, conversation: results});
+      });
+    })
   });
 });
 
